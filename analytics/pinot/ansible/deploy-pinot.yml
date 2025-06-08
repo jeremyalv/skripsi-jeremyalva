@@ -1,0 +1,228 @@
+---
+
+- name: Prepare Pinot host
+  hosts: pinot
+  connection: ssh
+  become: true
+  gather_facts: yes
+  tasks:
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: yes
+      changed_when: false
+
+    - name: Ensure conflicting Docker packages are removed
+      ansible.builtin.apt:
+        name:
+          - docker.io
+          - docker-doc
+          - docker-compose
+          # docker-compose-v2
+          - podman-docker
+          - containerd
+          - runc
+        state: absent
+      register: remove_status
+      failed_when: >
+        remove_status.failed and
+        'Unable to locate package' not in remove_status.msg and
+        'Package.*is not installed' not in remove_status.msg
+      ignore_errors: yes
+
+    - name: Install prerequisites for Docker repository setup
+      ansible.builtin.apt:
+        name:
+          - jq
+          - ca-certificates
+          - curl
+          - gnupg
+          - python3-pip
+          - virtualenv
+          - python3-setuptools
+        state: present
+        update_cache: yes
+
+    - name: Create directory for Docker GPG key
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: '0755'
+
+    - name: Add Docker's official GPG key
+      ansible.builtin.get_url:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        dest: /etc/apt/keyrings/docker.asc
+        mode: '0644'
+        force: yes
+
+    - name: Add Docker repository to Apt sources
+      ansible.builtin.shell: |
+        echo \
+        "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
+        $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}") stable" | \
+        sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+    - name: Install Docker Engine packages
+      ansible.builtin.apt:
+        name:
+          - docker-ce           
+          - docker-ce-cli       
+          - containerd.io       
+          - docker-buildx-plugin
+          - docker-compose-plugin
+        state: present
+        update_cache: yes
+
+    - name: Ensure Docker service is running
+      ansible.builtin.systemd:
+        name: docker
+        state: started
+        enabled: yes
+
+    - name: Install docker compose using pip
+      ansible.builtin.pip:
+        name: docker-compose
+        state: present
+
+    - name: Add remote user '{{ ansible_user }}' to the docker group
+      ansible.builtin.user:
+        name: "{{ ansible_user }}"
+        groups: docker
+        append: yes
+
+    - name: Create project directory on remote host
+      ansible.builtin.file:
+        path: /opt/pinot-docker
+        state: directory
+        mode: '0755'
+
+- name: Deploy Pinot cluster with compose
+  hosts: pinot
+  connection: ssh
+  become: true
+  gather_facts: yes
+  vars:
+    pinot_project_dir: /opt/pinot-docker
+  tasks:
+    - name: Tear down existing services
+      community.docker.docker_compose_v2:
+        project_src: "{{ pinot_project_dir }}"
+        files: 
+          - compose-pinot.yml
+        state: absent
+      ignore_errors: yes
+
+    - name: Copy docker compose file to remote host
+      ansible.builtin.copy:
+        src: compose-pinot.yml
+        dest: /opt/pinot-docker/compose-pinot.yml
+        mode: '0644'
+
+    - name: ensure /opt/prometheus directory exists
+      become: true
+      ansible.builtin.file:
+        path: /opt/prometheus
+        state: directory
+        mode: '0755'
+        owner: root
+        group: root
+
+    - name: copy prometheus jmx exporter
+      become: true
+      copy:
+        src: files/jmx_prometheus_javaagent-0.12.0.jar
+        dest: /opt/prometheus/jmx_prometheus_javaagent-0.12.0.jar
+        owner: root
+        group: root
+        mode: '0777'
+
+    - name: copy pinot prometheus jmx exporter configs
+      become: true
+      copy:
+        src: templates/pinot-jmx.yaml
+        dest: /opt/prometheus/pinot.yaml
+        owner: root
+        group: root
+        mode: '0777'
+    
+    - name: Create and start services
+      community.docker.docker_compose_v2:
+        project_src: "{{ pinot_project_dir }}"
+        files: 
+          - compose-pinot.yml
+        state: present
+        pull: missing
+      register: compose_output
+    
+    - name: Show compose results
+      ansible.builtin.debug:
+        var: compose_output
+      when: compose_output is defined
+
+    - name: Extract container info
+      set_fact:
+        zk_container_info: >-
+          {{ compose_output.containers | selectattr("Service", "equalto", "pinot-zookeeper") | list | first | default({}) }}
+        controller_container_info: >-
+          {{ compose_output.containers | selectattr("Service", "equalto", "pinot-controller") | list | first | default({}) }}
+        broker_container_info: >-
+          {{ compose_output.containers | selectattr("Service", "equalto", "pinot-broker") | list | first | default({}) }}
+        server_container_info: >-
+          {{ compose_output.containers | selectattr("Service", "equalto", "pinot-server") | list | first | default({}) }}
+      when: compose_output is defined and compose_output.containers is defined
+
+    - name: Verify Zookeeper container is running
+      ansible.builtin.assert:
+        that:
+          - zk_container_info.State | default('') == 'running'
+        fail_msg: "Pinot Zookeeper container is not running. State: {{ zk_container_info.State | default('Not Found') }}"
+        success_msg: "Pinot Zookeeper container is running."
+      when: compose_output is defined
+
+    - name: Verify Pinot Controller container is running
+      ansible.builtin.assert:
+        that:
+          - controller_container_info.State | default('') == 'running'
+        fail_msg: "Pinot Controller container is not running. State: {{ controller_container_info.State | default('Not Found') }}"
+        success_msg: "Pinot Controller container is running."
+      when: compose_output is defined
+
+    - name: Verify Pinot Broker container is running
+      ansible.builtin.assert:
+        that:
+          - broker_container_info.State | default('') == 'running'
+        fail_msg: "Pinot Broker container is not running. State: {{ broker_container_info.State | default('Not Found') }}"
+        success_msg: "Pinot Broker container is running."
+      when: compose_output is defined
+
+    - name: Verify Pinot Server container is running
+      ansible.builtin.assert:
+        that:
+          - server_container_info.State | default('') == 'running'
+        fail_msg: "Pinot Server container is not running. State: {{ server_container_info.State | default('Not Found') }}"
+        success_msg: "Pinot Server container is running."
+      when: compose_output is defined
+
+    - name: Wait for Pinot Controller UI port
+      ansible.builtin.wait_for:
+        port: 9000
+        host: 0.0.0.0 
+        delay: 5      
+        timeout: 60   
+      when: compose_output is defined
+
+    - name: Wait for Pinot Broker port
+      ansible.builtin.wait_for:
+        port: 8099
+        host: 0.0.0.0
+        delay: 5
+        timeout: 60
+      when: compose_output is defined
+
+    - name: Wait for Pinot Server port
+      ansible.builtin.wait_for:
+        port: 8098
+        host: 0.0.0.0
+        delay: 5
+        timeout: 60
+      when: compose_output is defined

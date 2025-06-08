@@ -1,0 +1,88 @@
+---
+- name: Apply Pulsar Schemas and Tables to Pinot
+  hosts: pinot
+  gather_facts: yes
+  connection: ssh
+  become: true
+
+  vars:
+    pinot_image: apachepinot/pinot:1.3.0
+    pinot_network: pinot-demo
+    pinot_controller_host: pinot-controller
+    pinot_controller_port: 9000
+    local_pulsar_configs_path: "../config/pulsar"
+    remote_temp_configs_path: "/tmp/pinot"
+    pulsar_service_url: "pulsar://{{ pulsar_broker_address }}:6650"
+
+  tasks:
+    - name: Ensure remote temp config directory exists
+      ansible.builtin.file:
+        path: "{{ remote_temp_configs_path }}"
+        state: directory
+        mode: '0755'
+      run_once: true
+
+    - name: Create Pulsar config subdirectories on remote host
+      ansible.builtin.file:
+        path: "{{ remote_temp_configs_path }}/pulsar/{{ item.name }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - { name: 'users' }
+        - { name: 'orders' }
+        - { name: 'products' }
+      loop_control:
+        loop_var: item
+      run_once: true
+
+    - name: Copy Pulsar config files to remote host using template
+      ansible.builtin.template:
+        src: "{{ local_pulsar_configs_path }}/{{ item.type }}/{{ item.file }}"
+        dest: "{{ remote_temp_configs_path }}/pulsar/{{ item.type }}/{{ item.file | regex_replace('\\.j2$', '') }}"
+        mode: '0644'
+      loop:
+        - { type: 'users',    file: 'schema.json.j2' }
+        - { type: 'users',    file: 'table.json.j2' }
+        - { type: 'orders',   file: 'schema.json.j2' }
+        - { type: 'orders',   file: 'table.json.j2' }
+        - { type: 'products', file: 'schema.json.j2' }
+        - { type: 'products', file: 'table.json.j2' }
+      loop_control:
+        loop_var: item
+      run_once: true
+
+    - name: Add Pulsar Tables to Pinot
+      community.docker.docker_container:
+        name: "pinot-add-pulsar-{{ item.name }}-temp-{{ ansible_date_time.epoch }}"
+        image: "{{ pinot_image }}"
+        command: >
+          AddTable
+          -schemaFile /tmp/pinot/pulsar/{{ item.name }}/schema.json
+          -tableConfigFile /tmp/pinot/pulsar/{{ item.name }}/table.json
+          -controllerHost {{ pinot_controller_host }}
+          -controllerPort {{ pinot_controller_port }}
+          -exec
+        network_mode: "{{ pinot_network }}"
+        volumes:
+          - "{{ remote_temp_configs_path }}:/tmp/pinot"
+        auto_remove: yes
+        interactive: yes
+        tty: yes
+        state: started
+        detach: no
+      loop:
+        - { name: 'users' }
+        - { name: 'orders' }
+        - { name: 'products' }
+      loop_control:
+        loop_var: item
+      register: add_table_result
+      run_once: true
+      failed_when: add_table_result.exists is defined and add_table_result.rc != 0 and 'Table already exists' not in add_table_result.stderr
+      changed_when: add_table_result.exists is defined and add_table_result.rc == 0
+
+    - name: Clean up temporary Pulsar config directory on remote host
+      ansible.builtin.file:
+        path: "{{ remote_temp_configs_path }}"
+        state: absent
+      run_once: true

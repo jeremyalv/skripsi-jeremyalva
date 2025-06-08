@@ -1,0 +1,21 @@
+{
+    "schemaName": "kafka_products",
+    "dimensionFieldSpecs": [
+        { "name": "id", "dataType": "LONG" },
+        { "name": "name", "dataType": "STRING" },
+        { "name": "currency", "dataType": "STRING" },
+        { "name": "category", "dataType": "STRING" },
+        { "name": "description", "dataType": "STRING" }
+    ],
+    "metricFieldSpecs": [
+        { "name": "price", "dataType": "DOUBLE" }
+    ],
+    "dateTimeFieldSpecs": [
+        { 
+            "name": "createdAt", 
+            "dataType": "TIMESTAMP", 
+            "format": "1:MILLISECONDS:EPOCH", 
+            "granularity": "1:MILLISECONDS" 
+        }
+    ]
+}

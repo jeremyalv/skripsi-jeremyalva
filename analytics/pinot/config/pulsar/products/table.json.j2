@@ -1,0 +1,33 @@
+{
+    "tableName": "pulsar_products",
+    "tableType": "REALTIME",
+    "segmentsConfig": {
+        "timeColumnName": "createdAt",
+        "timeType": "MILLISECONDS",
+        "replicasPerPartition": "1"
+    },
+    "tenants": {},
+    "tableIndexConfig": {
+        "loadMode": "MMAP"
+    },
+    "ingestionConfig": {
+        "streamIngestionConfig": {
+            "streamConfigMaps": [
+                {
+                    "streamType": "pulsar",
+                    "stream.pulsar.consumer.type": "LOWLEVEL",
+                    "stream.pulsar.decoder.class.name": "org.apache.pinot.plugin.inputformat.json.JSONMessageDecoder",
+                    "stream.pulsar.consumer.factory.class.name": "org.apache.pinot.plugin.stream.pulsar.PulsarConsumerFactory",
+                    "stream.pulsar.consumer.prop.auto.offset.reset": "smallest",
+                    "realtime.segment.flush.threshold.segment.rows": "500000",
+                    "realtime.segment.flush.threshold.time": "6h",
+                    "stream.pulsar.topic.name": "persistent://public/default/orders",
+                    "stream.pulsar.bootstrap.servers": "{{ pulsar_service_url }}"
+                }
+            ]
+        }
+    },
+    "continueOnError": true,
+    "rowTimeValueCheck": true,
+    "segmentTimeValueCheck": false
+}

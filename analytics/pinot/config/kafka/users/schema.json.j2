@@ -1,0 +1,22 @@
+{
+    "schemaName": "kafka_users",
+    "dimensionFieldSpecs": [
+        { "name": "id", "dataType": "LONG" },
+        { "name": "email", "dataType": "STRING" },
+        { "name": "firstName", "dataType": "STRING" },
+        { "name": "lastName", "dataType": "STRING", "defaultNullValue": "" },
+        { "name": "username", "dataType": "STRING" },
+        { "name": "enabled", "dataType": "BOOLEAN" },
+        { "name": "accountNonExpired", "dataType": "BOOLEAN" },
+        { "name": "accountNonLocked", "dataType": "BOOLEAN" },
+        { "name": "credentialsNonExpired", "dataType": "BOOLEAN" }
+    ],
+    "dateTimeFieldSpecs": [
+        { 
+            "name": "createdAt", 
+            "dataType": "TIMESTAMP", 
+            "format": "1:MILLISECONDS:EPOCH", 
+            "granularity": "1:MILLISECONDS" 
+        }
+    ]
+}

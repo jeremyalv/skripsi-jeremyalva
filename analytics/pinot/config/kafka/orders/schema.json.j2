@@ -1,0 +1,21 @@
+{
+    "schemaName": "kafka_orders",
+    "dimensionFieldSpecs": [
+        { "name": "id", "dataType": "LONG" },
+        { "name": "userId", "dataType": "LONG" },
+        { "name": "currency", "dataType": "STRING" },
+        { "name": "currentStatus", "dataType": "INT" },
+        { "name": "orderItems", "dataType": "STRING", "singleValueField": false, "defaultNullValue": "[]" }
+    ],
+    "metricFieldSpecs": [
+        { "name": "totalAmount", "dataType": "DOUBLE" }
+    ],
+    "dateTimeFieldSpecs": [
+        { 
+            "name": "createdAt", 
+            "dataType": "TIMESTAMP", 
+            "format": "1:MILLISECONDS:EPOCH", 
+            "granularity": "1:MILLISECONDS" 
+        }
+    ]
+}

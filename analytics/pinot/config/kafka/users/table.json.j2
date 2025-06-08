@@ -1,0 +1,36 @@
+{
+    "tableName": "kafka_users",
+    "tableType": "REALTIME",
+    "segmentsConfig": {
+        "timeColumnName": "createdAt",
+        "timeType": "MILLISECONDS",
+        "replicasPerPartition": "1"
+    },
+    "tenants": {},
+    "tableIndexConfig": {
+        "loadMode": "MMAP"
+    },
+    "ingestionConfig": {
+        "streamIngestionConfig": {
+            "streamConfigMaps": [
+                {
+                    "streamType": "kafka",
+                    "stream.kafka.decoder.prop.format": "JSON",
+                    "stream.kafka.decoder.class.name": "org.apache.pinot.plugin.stream.kafka.KafkaJSONMessageDecoder",
+                    "key.serializer": "org.apache.kafka.common.serialization.StringSerializer",
+                    "value.serializer": "org.springframework.kafka.support.serializer.JsonSerializer",
+                    "stream.kafka.consumer.type": "LOWLEVEL",
+                    "realtime.segment.flush.threshold.segment.rows": "500000",
+                    "realtime.segment.flush.threshold.time": "6h",
+                    "stream.kafka.consumer.factory.class.name": "org.apache.pinot.plugin.stream.kafka20.KafkaConsumerFactory",
+                    "stream.kafka.consumer.prop.auto.offset.reset": "smallest",
+                    "stream.kafka.topic.name": "orders",
+                    "stream.kafka.broker.list": "{{ bootstrap_servers }}"
+                }
+            ]
+        }
+    },
+    "continueOnError": true,
+    "rowTimeValueCheck": true,
+    "segmentTimeValueCheck": false
+}
