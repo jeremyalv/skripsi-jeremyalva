@@ -1,0 +1,103 @@
+---
+
+- name: Add Confluent repository key
+  apt_key:
+    url: https://packages.confluent.io/deb/{{ confluent_version }}/archive.key
+    state: present
+
+- name: Add Confluent repository
+  apt_repository:
+    repo: "{{ item }}"
+    update_cache: true
+  with_items:
+    - deb [arch=amd64] https://packages.confluent.io/deb/{{ confluent_version }} stable main
+
+- name: install Java
+  become: true
+  apt:
+    name: openjdk-11-jdk
+    state: latest
+    update_cache: yes
+
+# - name: create system account kafka
+#   user:
+#     name: kafka
+#     groups: root
+#     state: present
+#     createhome: false
+
+- name: Install Confluent platform
+  apt:
+    # name: confluent-community-2.13
+    name: confluent-platform
+
+# the user cp-kafka is created by the previous step (install Confluent)
+# a group named cp-kafka is not created; therefore, we use group root.
+- name: Set owner/group of kafka data directory
+  file:
+    path: "{{ kafka_datadir }}"
+    owner: cp-kafka
+    group: root
+    state: directory
+
+- name: Set server.properties file
+  template:
+    src: templates/server.properties.j2
+    dest: /etc/kafka/server.properties
+    owner: cp-kafka
+    group: root
+    mode: '0600'
+    backup: true
+  notify: restart kafka
+
+- name: Install Kafka systemd service file
+  become: true
+  template:
+    src: templates/kafka.service.j2
+    dest: /etc/systemd/system/kafka.service
+    owner: root
+    group: root
+    mode: '0644'
+  notify: restart systemd and restart kafka
+
+- name: Ensure /opt/prometheus directory exists
+  become: true
+  ansible.builtin.file:
+    path: /opt/prometheus
+    state: directory
+    mode: '0755'
+    owner: root
+    group: root
+
+- name: Copy prometheus jmx exporter file
+  become: true
+  copy:
+    src: files/jmx_prometheus_javaagent-1.2.0.jar
+    dest: /opt/prometheus/jmx_prometheus_javaagent-1.2.0.jar
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Copy kafka prometheus jmx exporter configs
+  become: true
+  copy:
+    src: templates/kafka-broker-jmx.yaml
+    dest: /opt/prometheus/kafka_broker.yml
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Set kafka-server-start file
+  template:
+    src: templates/kafka-server-start.j2
+    dest: /usr/bin/kafka-server-start
+    owner: root
+    group: root
+    mode: '0755'
+    backup: true
+
+- name: Start kafka broker
+  service:
+    name: kafka
+    enabled: true
+    state: started

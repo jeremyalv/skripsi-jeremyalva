@@ -1,0 +1,14 @@
+---
+
+component_tag: test
+
+# Confluent settings
+confluent_version: 6.2
+scala_version: 2.13
+
+# Kafka settings
+zk_client_port: 2181
+kafka_internal_port: 9091
+kafka_datadir: /mnt/storage/kafka
+
+java_max_heap_size: 4G

@@ -1,0 +1,8 @@
+---
+
+confluent_version: 6.2 # Kafka 2.8.x
+scala_version: 2.13
+zk_datadir: /var/lib/zookeeper
+zk_client_port: 2181
+max_client_cnxns: 100
+component_tag: test
