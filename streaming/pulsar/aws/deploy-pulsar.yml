@@ -1,0 +1,207 @@
+- name: Pulsar setup
+  hosts: zookeeper, bookie, pulsar_broker
+  connection: ssh
+  become: true
+  vars:
+    # Private bucket for storing Pulsar binaries to speed up deployments by ~5x (+ improve reliability)
+    s3_bucket_name: "<your_private_s3_bucket>"
+    # Path to Pulsar binary in S3
+    s3_pulsar_binary_key: "apache-pulsar-{{ pulsar_version }}-bin.tar.gz"
+    # Local path inside EC2 for download
+    local_pulsar_binary_path: "/opt/pulsar/apache-pulsar-{{ pulsar_version }}-bin.tar.gz"
+    broker_public_ips: "{{ groups['pulsar_broker'] | map('extract', hostvars, 'public_ip') | list }}"
+    broker_web_urls: "{{ broker_public_ips | map('regex_replace', '^(.*)$', 'http://\\1:8080') | join(',') }}"
+    broker_service_urls: "{{ broker_public_ips | map('regex_replace', '^(.*)$', 'pulsar://\\1:6650') | join(',') }}"
+  tasks:
+    - name: Create necessary directories
+      file: 
+        path: "{{ item }}"
+        state: directory
+      with_items:
+        - /opt/pulsar
+
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: yes
+      changed_when: false
+    
+    - name: Install apt packages
+      apt:
+        state: latest
+        name:
+          - wget
+          # Use Java 11 with Pulsar 2.9.2 for compatibility
+          - openjdk-11-jdk
+          - sysstat
+          - vim
+          - python3-pip
+        update_cache: yes
+      become: true
+
+    - name: Install boto3 and botocore Python packages using pip
+      pip:
+        name:
+          - boto3
+          - botocore
+      become: true
+    
+    - set_fact:
+        zookeeper_servers: "{{ groups['zookeeper'] | map('extract', hostvars, ['ansible_default_ipv4', 'address']) | map('regex_replace', '^(.*)$', '\\1:2181') | join(',') }}"
+        service_url: "{{ broker_service_urls }}"
+        http_url: "{{ broker_web_urls }}"
+        pulsar_version: 2.9.2
+    
+    - name: Download Pulsar binary from S3
+      amazon.aws.s3_object:
+        bucket: "{{ s3_bucket_name }}"
+        object: "{{ s3_pulsar_binary_key }}"
+        dest: "{{ local_pulsar_binary_path }}"
+        mode: get
+      retries: 3
+      delay: 3
+    
+    - name: Unarchive Pulsar binary from local path
+      unarchive:
+        src: "{{ local_pulsar_binary_path }}"
+        remote_src: yes
+        dest: /opt/pulsar
+        extra_opts: ["--strip-components=1"]
+    
+    - set_fact:
+        max_heap_memory: "3G"
+        max_direct_memory: "3G"
+        cluster_name: "local"
+    
+    - name: Add pulsar_env.sh configuration file
+      template:
+        src: "../templates/pulsar_env.sh"
+        dest: "/opt/pulsar/conf/pulsar_env.sh"
+
+- name: Set up ZooKeeper
+  hosts: zookeeper
+  connection: ssh
+  become: true
+  vars:
+    pulsar_install_dir: "/opt/pulsar"
+    zookeeper_data_dir: "/var/lib/zookeeper/data"
+    broker_public_ips: "{{ groups['pulsar_broker'] | map('extract', hostvars, 'public_ip') | list }}"
+    broker_web_urls: "{{ broker_public_ips | map('regex_replace', '^(.*)$', 'http://\\1:8080') | join(',') }}"
+    broker_service_urls: "{{ broker_public_ips | map('regex_replace', '^(.*)$', 'pulsar://\\1:6650') | join(',') }}"
+  tasks:
+    - set_fact:
+        zid: "{{ groups['zookeeper'].index(inventory_hostname) }}"
+        max_heap_memory: "512m"
+        max_direct_memory: "1G"
+
+    - name: Create zookeeper data directory
+      file:
+        path: "/opt/pulsar/{{ item }}"
+        state: directory
+      with_items:
+        - data/zookeeper
+
+    - name: Add zookeeper.conf file
+      template:
+        src: "../templates/zookeeper.conf"
+        dest: "/opt/pulsar/conf/zookeeper.conf"
+
+    - name: Add myid file for zookeeper
+      template:
+        src: "../templates/myid"
+        dest: "/opt/pulsar/data/zookeeper/myid"
+
+    - name: Add zookeeper.service systemd file
+      template:
+        src: "../templates/zookeeper.service"
+        dest: "/etc/systemd/system/zookeeper.service"
+
+    - name: systemd ZooKeeper start
+      systemd:
+        state: restarted
+        daemon_reload: yes
+        name: "zookeeper"
+
+    - name: Initialize cluster metadata
+      shell: |
+        bin/pulsar initialize-cluster-metadata \
+          --cluster {{ cluster_name }} \
+          --zookeeper {{ hostvars[inventory_hostname]['ansible_default_ipv4']['address'] }}:2181 \
+          --configuration-store {{ hostvars[inventory_hostname]['ansible_default_ipv4']['address'] }}:2181 \
+          --web-service-url {{ broker_web_urls }} \
+          --broker-service-url {{ broker_service_urls }}
+      args:
+        chdir: /opt/pulsar
+      when: groups['zookeeper'][0] == inventory_hostname
+      register: init_meta
+      failed_when: init_meta.rc != 0 and 'Cluster metadata already initialized' not in init_meta.stderr
+      changed_when: init_meta.rc == 0
+
+- name: Set up bookies
+  hosts: bookie
+  connection: ssh
+  become: true
+  tasks:
+    - name: Clear /var/log/syslog using echo
+      ansible.builtin.shell:
+        cmd: 'echo > /var/log/syslog'
+    - template:
+        src: "../templates/bookkeeper.conf"
+        dest: "/opt/pulsar/conf/bookkeeper.conf"
+
+    - template:
+        src: "../templates/bookkeeper.service"
+        dest: "/etc/systemd/system/bookkeeper.service"
+
+    - systemd:
+        state: restarted
+        daemon_reload: yes
+        name: "bookkeeper"
+
+- name: Set up brokers
+  hosts: pulsar_broker
+  connection: ssh
+  become: true
+  vars:
+    pulsar_install_dir: "/opt/pulsar"
+  tasks:
+    - name: Clear /var/log/syslog using echo
+      ansible.builtin.shell:
+        cmd: 'echo > /var/log/syslog'
+        
+    - name: Set up Pulsar broker
+      template:
+        src: "../templates/broker.conf"
+        dest: "/opt/pulsar/conf/broker.conf"
+
+    - name: Set up function worker
+      template:
+        src: "../templates/functions_worker.yaml"
+        dest: "/opt/pulsar/conf/functions_worker.yaml"
+
+    - name: Create Pulsar Broker systemd service file
+      template:
+        src: "../templates/broker.service"
+        dest: "/etc/systemd/system/broker.service"
+        mode: '0644'
+
+    - name: Ensure Pulsar Broker service is started and enabled
+      systemd:
+        state: restarted
+        daemon_reload: yes
+        # use "broker" for service name, not 'pulsar' - this is a systemd service, don't change to pulsar_broker
+        name: "broker"
+    
+- name: Hosts address
+  hosts: localhost
+  become: false
+  tasks:
+    - name: Gather public IPs/DNS from inventory for verification
+      set_fact:
+        zk_info: "{{ groups['zookeeper'] | map('extract', hostvars, ['public_ip']) | list }}"
+        bookie_info: "{{ groups['bookie'] | map('extract', hostvars, ['public_ip']) | list }}"
+        broker_info: "{{ groups['pulsar_broker'] | map('extract', hostvars, ['public_ip']) | list }}"
+      run_once: true
+
+    - debug: msg="ZooKeeper Public Info {{ zk_info }}"
+    - debug: msg="Bookie Public Info {{ bookie_info }}"
+    - debug: msg="Broker Public Info {{ broker_info }}"

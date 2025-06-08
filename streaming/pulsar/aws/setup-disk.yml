@@ -1,0 +1,32 @@
+---
+- name: Bookie disk setup
+  hosts: bookie
+  connection: ssh
+  become: true
+  vars:
+    block_name: /dev/nvme1n1
+  tasks:
+    - name: Format single NVMe disk
+      filesystem:
+        fstype: xfs
+        dev: "{{ block_name }}"
+    
+    - name: Create mount points
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      with_items:
+        - /mnt/journal
+        - /mnt/storage
+    
+    - name: Mount single NVMe disk to both mount points
+      mount:
+        path: "{{ item.path }}"
+        src: "{{ block_name }}"
+        fstype: xfs
+        opts: defaults,noatime,nodiscard
+        state: mounted
+      with_items:
+        - { path: "/mnt/journal" }
+        - { path: "/mnt/storage" }
