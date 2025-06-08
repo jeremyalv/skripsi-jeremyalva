@@ -1,0 +1,19 @@
+[Unit]
+Description=Ecommerce Spring Boot App
+After=network.target
+
+[Service]
+User={{ app_user }}
+Group={{ app_group }}
+WorkingDirectory={{ app_install_dir }}
+
+# Execute the JAR file using the installed Java
+# Add any required Spring Boot profiles or JVM options here if needed
+# Example: -Dspring.profiles.active=prod
+ExecStart=/usr/bin/java -jar {{ remote_jar_path }}
+SuccessExitStatus=143
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

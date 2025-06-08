@@ -1,0 +1,69 @@
+---
+- name: Deploy and Run Locust
+  hosts: locust
+  become: true
+  connection: ssh
+  vars:
+    locust_base_dir: /opt/locust
+
+  tasks:
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: yes
+      changed_when: false
+
+    - name: Clear /var/log/syslog using echo
+      ansible.builtin.shell:
+        cmd: 'echo > /var/log/syslog'
+
+    - name: Install prerequisites for Locust setup
+      ansible.builtin.apt:
+        name:
+          - curl
+          - python3-pip
+          - python3-setuptools
+        state: present
+        update_cache: yes
+
+    - name: Install Locust using pip
+      ansible.builtin.pip:
+        name: locust
+        state: present
+
+    - name: Create base Locust dir
+      ansible.builtin.file:
+        path: "{{ locust_base_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Copy requirements.txt
+      become: true
+      ansible.builtin.copy:
+        src: templates/loadtest/requirements.txt
+        dest: "{{ locust_base_dir }}/requirements.txt"
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Install dependencies
+      ansible.builtin.shell:
+        chdir: "{{ locust_base_dir }}/"
+        cmd: pip3 install -r requirements.txt
+
+    - name: Copy b-model file
+      become: true
+      ansible.builtin.copy:
+        src: templates/loadtest/bmodel.py
+        dest: "{{ locust_base_dir }}/bmodel.py"
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Copy Locustfile
+      become: true
+      ansible.builtin.copy:
+        src: templates/loadtest/locustfile.py
+        dest: "{{ locust_base_dir }}/locustfile.py"
+        owner: root
+        group: root
+        mode: '0755'

@@ -1,0 +1,178 @@
+---
+- name: Prepare Monitoring Host
+  hosts: prometheus
+  become: true
+  connection: ssh
+  vars:
+    prometheus_base_dir: /opt/prometheus
+    prometheus_data_dir: "{{ prometheus_base_dir }}/data"
+    grafana_data_dir: /opt/grafana/data
+    compose_project_dir: /opt/monitoring
+  
+  tasks:
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: yes
+      changed_when: false
+
+    - name: Clear /var/log/syslog using echo
+      ansible.builtin.shell:
+        cmd: 'echo > /var/log/syslog'
+
+    - name: Ensure conflicting Docker packages are removed
+      ansible.builtin.apt:
+        name:
+          - docker.io
+          - docker-doc
+          - docker-compose
+          - podman-docker
+          - containerd
+          - runc
+        state: absent
+      register: remove_status
+      failed_when: >
+        remove_status.failed and
+        'Unable to locate package' not in remove_status.msg and
+        'Package.*is not installed' not in remove_status.msg
+      ignore_errors: yes
+
+    - name: Install prerequisites for Docker repository setup
+      ansible.builtin.apt:
+        name:
+          - jq
+          - ca-certificates
+          - curl
+          - gnupg
+          - python3-pip
+          - virtualenv
+          - python3-setuptools
+        state: present
+        update_cache: yes
+
+    - name: Create directory for Docker GPG key
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: '0755'
+
+    - name: Add Docker's official GPG key
+      ansible.builtin.get_url:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        dest: /etc/apt/keyrings/docker.asc
+        mode: '0644'
+        force: yes
+
+    - name: Add Docker repository to Apt sources
+      ansible.builtin.shell: |
+        echo \
+        "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
+        $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}") stable" | \
+        sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+    - name: Install Docker Engine packages
+      ansible.builtin.apt:
+        name:
+          - docker-ce           
+          - docker-ce-cli       
+          - containerd.io       
+          - docker-buildx-plugin
+          - docker-compose-plugin
+        state: present
+        update_cache: yes
+
+    - name: Ensure Docker service is running
+      ansible.builtin.systemd:
+        name: docker
+        state: started
+        enabled: yes
+
+    - name: Install docker compose using pip
+      ansible.builtin.pip:
+        name: docker-compose
+        state: present
+
+    - name: Add remote user '{{ ansible_user }}' to the docker group
+      ansible.builtin.user:
+        name: "{{ ansible_user }}"
+        groups: docker
+        append: yes
+
+    - name: Create base Prometheus dir
+      ansible.builtin.file:
+        path: "{{ prometheus_base_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Copy Prometheus configuration templates
+      become: true
+      ansible.builtin.template:
+        src: templates/prometheus.yaml.j2
+        #! Kill all docker images before re-running monitoring task playbook to avoid volume mount to prometheus.yaml folder!
+        #! Docker may start first before ansible, causing a new directory created: https://github.com/ansible/ansible/issues/10244
+        dest: "{{ prometheus_base_dir }}/prometheus.yaml"
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Create Prometheus data directory with correct permissions
+      ansible.builtin.file:
+        path: "{{ prometheus_data_dir }}"
+        state: directory
+        mode: '0777'
+
+    - name: Create Grafana data directory with correct permissions
+      ansible.builtin.file:
+        path: "{{ grafana_data_dir }}"
+        state: directory
+        mode: '0777'
+        recurse: yes
+
+    - name: Create Docker Compose project directory
+      ansible.builtin.file:
+        path: "{{ compose_project_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Copy Docker Compose file
+      ansible.builtin.copy:
+        src: ./compose-monitoring.yaml
+        dest: "{{ compose_project_dir }}/docker-compose.yaml"
+        mode: '0644'
+
+- name: Deploy Prometheus and Grafana server
+  hosts: prometheus
+  connection: ssh
+  become: true
+  gather_facts: no
+
+  vars:
+    compose_project_dir: /opt/monitoring
+
+  tasks:
+    - name: Ensure Monitoring Stack containers are created and running
+      community.docker.docker_compose_v2:
+        project_src: "{{ compose_project_dir }}"
+        state: present
+        pull: missing
+      register: compose_result
+
+    - name: Show Docker Compose results
+      ansible.builtin.debug:
+        var: compose_result
+      when: compose_result is defined
+
+    - name: Wait for Prometheus dashboard port (9090) to be available
+      ansible.builtin.wait_for:
+        port: 9090
+        host: 0.0.0.0
+        delay: 5
+        timeout: 120
+      when: compose_result is defined and compose_result.changed
+
+    - name: Wait for Grafana dashboard port (3000) to be available
+      ansible.builtin.wait_for:
+        port: 3000
+        host: 0.0.0.0
+        delay: 5
+        timeout: 120
+      when: compose_result is defined and compose_result.changed

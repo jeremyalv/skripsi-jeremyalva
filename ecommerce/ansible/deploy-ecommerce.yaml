@@ -1,0 +1,86 @@
+---
+- name: Deploy Ecommerce Spring Boot Application
+  hosts: ecommerce
+  become: true
+  connection: ssh
+  gather_facts: yes
+
+  vars:
+    app_name: flow
+    app_user: "{{ app_name }}"
+    app_group: "{{ app_name }}"
+    app_install_dir: "/opt/{{ app_name }}"
+    app_jar_name: "flow-0.0.1-SNAPSHOT.jar"
+
+    local_jar_path: "../flow/target/{{ app_jar_name }}"
+    remote_jar_path: "{{ app_install_dir }}/{{ app_jar_name }}"
+    java_package: openjdk-17-jdk
+
+  tasks:
+    - name: Clear /var/log/syslog using echo
+      ansible.builtin.shell:
+        cmd: 'echo > /var/log/syslog'
+        
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: yes
+      changed_when: false
+      
+    - name: Ensure Java Runtime is installed
+      ansible.builtin.apt:
+        name: "{{ java_package }}"
+        state: present
+        update_cache: yes
+
+    - name: Create application group
+      ansible.builtin.group:
+        name: "{{ app_group }}"
+        state: present
+
+    - name: Create application user
+      ansible.builtin.user:
+        name: "{{ app_user }}"
+        group: "{{ app_group }}"
+        shell: /bin/false
+        create_home: no
+        state: present
+
+    - name: Create application installation directory
+      ansible.builtin.file:
+        path: "{{ app_install_dir }}"
+        state: directory
+        owner: "{{ app_user }}"
+        group: "{{ app_group }}"
+        mode: '0755'
+
+    - name: Copy application JAR file to remote host
+      ansible.builtin.copy:
+        src: "{{ local_jar_path }}"
+        dest: "{{ remote_jar_path }}"
+        owner: "{{ app_user }}"
+        group: "{{ app_group }}"
+        mode: '0644'
+      notify: Restart ecommerce service
+
+    - name: Create systemd service file from template
+      ansible.builtin.template:
+        src: templates/ecommerce.service.j2
+        dest: "/etc/systemd/system/{{ app_name }}.service"
+        owner: root
+        group: root
+        mode: '0644'
+      notify: Restart ecommerce service
+
+    - name: Ensure {{ app_name }} service is enabled and started
+      ansible.builtin.systemd:
+        name: "{{ app_name }}"
+        state: started
+        enabled: yes
+        daemon_reload: yes
+
+  handlers:
+    - name: Restart ecommerce service
+      ansible.builtin.systemd:
+        name: "{{ app_name }}"
+        state: restarted
+        daemon_reload: yes

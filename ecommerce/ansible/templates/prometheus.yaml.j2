@@ -1,0 +1,57 @@
+#jinja2: trim_blocks: False
+---
+global:
+  scrape_interval: 10s
+  evaluation_interval: 10s
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ['localhost:9090']
+
+  - job_name: ecommerce-app
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets:
+      {%- for host in groups['ecommerce'] %}
+        - '{{ hostvars[host].public_ip }}:9000'
+      {%- endfor %}
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+
+  {%- if kafka_broker_ip | default(false) %}
+  - job_name: kafka-brokers
+    static_configs:
+      - targets:
+        {%- for broker_ip in kafka_broker_ip.split(',') %}
+        - '{{ broker_ip.strip() }}:1234'
+        {%- endfor %}
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+  {%- endif %}
+
+  {%- if pulsar_broker_ip | default(false) %}
+  - job_name: pulsar-brokers
+    static_configs:
+      - targets:
+        {%- for broker_ip in pulsar_broker_ip.split(',') %}
+        - '{{ broker_ip.strip() }}:8080'
+        {%- endfor %}
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+  {%- endif %}
+
+    {%- if pinot_ip | default(false) %}
+  - job_name: pinot-cluster
+    static_configs:
+      - targets:
+        - '{{ pinot_ip.strip() }}:7070'
+        - '{{ pinot_ip.strip() }}:7080'
+        - '{{ pinot_ip.strip() }}:7090'
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+  {%- endif %}
