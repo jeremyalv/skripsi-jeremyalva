@@ -99,25 +99,112 @@ deploy-pulsar.yml -vvvv
 ```
 
 2. Deploy the Pinot server
+```
+cd analytics/pinot/
 
-TBA
+# Provision infrastructure via Terraform
+cd aws/
+terraform apply
+cd ..
 
-3. Deploy the E-Commerce server
+# Apply config changes via Ansible
+cd ansible/
 
-TBA
+# 1. Deploy Pinot Server
+TF_STATE=../aws/ \
+ansible-playbook \
+--user='ubuntu' \
+--inventory=`which terraform-inventory` \
+--private-key="~/.ssh/ta-flow/flow_pinot_aws" \
+deploy-pinot.yml -vvvv
 
-4. Deploy Prometheus, Grafana, and Locust server
+# 2a. Configure Pinot to ingest from Kafka
+TF_STATE=../aws/ \
+ansible-playbook \
+--user='ubuntu' \
+--inventory=`which terraform-inventory` \
+--private-key="~/.ssh/ta-flow/flow_pinot_aws" \
+--extra-vars "kafka_bootstrap_servers=<KAFKA_BROKER_IP>" \
+apply-kafka-schema.yml -vvvv
 
-TBA
+# 2b. Configure Pinot to ingest from Pulsar
+TF_STATE=../aws/ \
+ansible-playbook \
+--user='ubuntu' \
+--inventory=`which terraform-inventory` \
+--private-key="~/.ssh/ta-flow/flow_pinot_aws" \
+--extra-vars "pulsar_broker_address=<PULSAR_BROKER_IP>" \
+apply-pulsar-schema.yml -vvvv
 
-5. To execute the load test:
-SSH into the Locust Server EC2 instance:
+```
+
+3. Deploy the E-Commerce and auxiliary services
+```
+cd ecommerce/
+
+# 1. Provision infrastructure for ecommerce, prometheus, and locust via Terraform
+cd aws/
+terraform apply
+cd ..
+
+# Run ./mvnw clean install here to rebuild app JAR
+# 2. Setup server disks 
+TF_STATE=../aws/ \
+ansible-playbook \
+    --inventory=`which terraform-inventory` \
+    --user='ubuntu' \
+    --private-key="~/.ssh/ta-flow/flow_ecommerce_aws" \
+    --extra-vars "volume_device=/dev/sdf" \
+    setup-disk.yaml -vvvv
+
+
+# 3. Deploy E-Commerce service
+TF_STATE=../aws/ \
+ansible-playbook \
+    --inventory=`which terraform-inventory` \
+    --user='ubuntu' \
+    --private-key="~/.ssh/ta-flow/flow_ecommerce_aws" \
+    deploy-ecommerce.yaml -vvvv
+
+
+# 4. Deploy monitoring service
+TF_STATE=../aws/ \
+ansible-playbook \
+    --inventory=`which terraform-inventory` \
+    --user='ubuntu' \
+    --private-key="~/.ssh/ta-flow/flow_ecommerce_aws" \
+    --extra-vars "pinot_ip='<PINOT_IP>' kafka_broker_ip='<KAFKA_IP_1>,<KAFKA_IP_2>,<KAFKA_IP_3>'" \
+    deploy-monitoring.yaml -vvvv
+```
+
+4. To execute the load test:
+* Ensure you've generated a b-model traffic profile. 
+
+You can find an example in `loadtest/bmodel_user_profile.json`
+Use the `generate_profile.py` to generate b-model traces.
+Then, copy this value to `ecommerce/ansible/templates/loadtest/bmodel.py`'s `EXTENDED_TARGET_USER_PROFILE`
+
+
+* Deploy the Locust service, which uploads Python scripts and other files to the instance
+
+```
+TF_STATE=../aws/ \
+ansible-playbook \
+    --inventory=`which terraform-inventory` \
+    --user='ubuntu' \
+    --private-key="~/.ssh/ta-flow/flow_ecommerce_aws" \
+    deploy-locust.yaml
+```
+
+* SSH into the Locust Server EC2 instance:
+
 ```
 cd ~/.ssh/ta-flow (or your specific SSH key directory)
 ssh -i flow_ecommerce_aws ubuntu@<LOCUST_SERVER_IP>
 ```
 
-Go to the Locust directory and change permissions of the files
+* Go to the Locust directory and change permissions of the files
+
 ```
 cd /opt/locust
 chmod 777 *
